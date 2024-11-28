@@ -300,6 +300,11 @@ func (service *StatusCakeMonitorService) GetAll() ([]models.Monitor, error) {
 			return nil, err
 		}
 
+		if res == nil || res.StatusCakeData == nil {
+			log.Error(errors.New("empty response"), "Got empty response from StatusCake when fetching monitors")
+			return nil, errors.New("empty response")
+		}
+
 		StatusCakeMonitorData = append(StatusCakeMonitorData, res.StatusCakeData...)
 		if page >= res.StatusCakeMetadata.PageCount {
 			break
