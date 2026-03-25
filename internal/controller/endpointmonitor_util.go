@@ -5,14 +5,13 @@ import (
 	"github.com/stakater/IngressMonitorController/v2/pkg/monitors"
 )
 
-func findMonitorByName(monitorService *monitors.MonitorServiceProxy, monitorName string) *models.Monitor {
-
-	monitor, _ := monitorService.GetByName(monitorName)
+func findMonitorByName(monitorService *monitors.MonitorServiceProxy, monitorName string) (*models.Monitor, error) {
+	monitor, err := monitorService.GetByName(monitorName)
 	// Monitor Exists
 	if monitor != nil {
-		return monitor
+		return monitor, nil
 	}
-	return nil
+	return nil, err
 }
 
 // findMonitorServiceThatContainsMonitor iterates over all monitor services and returns the one that contains the monitor

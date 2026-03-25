@@ -24,8 +24,10 @@ import (
 	"github.com/stakater/IngressMonitorController/v2/pkg/secret"
 )
 
-var log = logf.Log.WithName("statuscake-monitor")
-var rateLimiter = rate.NewLimiter(5, 1) // Allow 5 requests per second
+var (
+	log         = logf.Log.WithName("statuscake-monitor")
+	rateLimiter = rate.NewLimiter(5, 1) // Allow 5 requests per second
+)
 
 // StatusCakeMonitorService is the service structure for StatusCake
 type StatusCakeMonitorService struct {
@@ -192,7 +194,6 @@ func buildUpsertForm(m models.Monitor, cgroup string) url.Values {
 
 	if providerConfig != nil && len(providerConfig.StatusCodes) > 0 {
 		f.Add("status_codes_csv", providerConfig.StatusCodes)
-
 	} else {
 		statusCodes := []string{
 			"204", // No content
@@ -332,7 +333,10 @@ func (service *StatusCakeMonitorService) Setup(p config.Provider) {
 
 // GetByName function will Get a monitor by it's name
 func (service *StatusCakeMonitorService) GetByName(name string) (*models.Monitor, error) {
-	monitors := service.GetAll()
+	monitors, err := service.GetAll()
+	if err != nil {
+		return nil, err
+	}
 	if len(monitors) != 0 {
 		for _, monitor := range monitors {
 			if monitor.Name == name {
@@ -342,7 +346,6 @@ func (service *StatusCakeMonitorService) GetByName(name string) (*models.Monitor
 	}
 	errorString := "GetByName Request failed for name: " + name
 	return nil, errors.New(errorString)
-
 }
 
 // GetByID function will Get a monitor by it's ID
@@ -474,19 +477,22 @@ func (service *StatusCakeMonitorService) doRequest(req *http.Request) (*http.Res
 }
 
 // GetAll function will fetch all monitors
-func (service *StatusCakeMonitorService) GetAll() []models.Monitor {
+func (service *StatusCakeMonitorService) GetAll() ([]models.Monitor, error) {
 	var allMonitors []models.Monitor
 
 	var uptimeData []StatusCakeMonitorData
 	page := 1
 	for {
-		res := service.fetchMonitors(page)
-		if res != nil {
-			uptimeData = append(uptimeData, res.StatusCakeData...)
-			if page >= res.StatusCakeMetadata.PageCount {
-				break
-			}
-		} else {
+		res, err := service.fetchMonitors(page)
+		if err != nil {
+			return nil, err
+		}
+		if res == nil || res.StatusCakeData == nil {
+			return nil, errors.New("empty response from StatusCake when fetching monitors")
+		}
+
+		uptimeData = append(uptimeData, res.StatusCakeData...)
+		if page >= res.StatusCakeMetadata.PageCount {
 			break
 		}
 		page++
@@ -509,7 +515,7 @@ func (service *StatusCakeMonitorService) GetAll() []models.Monitor {
 	}
 	allMonitors = append(allMonitors, StatusCakeHeartbeatsToBaseMonitorsMapper(heartbeatData)...)
 
-	return allMonitors
+	return allMonitors, nil
 }
 
 func (service *StatusCakeMonitorService) fetchHeartbeatMonitors(page int) *StatusCakeHeartbeatMonitor {
@@ -557,11 +563,11 @@ func (service *StatusCakeMonitorService) fetchHeartbeatMonitors(page int) *Statu
 	return &result
 }
 
-func (service *StatusCakeMonitorService) fetchMonitors(page int) *StatusCakeMonitor {
+func (service *StatusCakeMonitorService) fetchMonitors(page int) (*StatusCakeMonitor, error) {
 	u, err := url.Parse(service.url)
 	if err != nil {
 		log.Error(err, "Unable to Parse monitor URL")
-		return nil
+		return nil, err
 	}
 	u.Path = "/v1/uptime/"
 	query := u.Query()
@@ -572,34 +578,34 @@ func (service *StatusCakeMonitorService) fetchMonitors(page int) *StatusCakeMoni
 	req, err := http.NewRequest("GET", u.String(), nil)
 	if err != nil {
 		log.Error(err, "Unable to retrieve monitor")
-		return nil
+		return nil, err
 	}
 	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", service.apiKey))
 
 	resp, err := service.doRequest(req)
 	if err != nil {
 		log.Error(err, "Unable to retrieve monitor")
-		return nil
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Error(err, "Unable to read response body")
-		return nil
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil
+		return nil, errors.New("Failed to fetch monitors, status code: " + strconv.Itoa(resp.StatusCode))
 	}
 	var StatusCakeMonitor StatusCakeMonitor
 	err = json.Unmarshal(bodyBytes, &StatusCakeMonitor)
 	if err != nil {
 		log.Error(err, "Failed to unmarshal response")
-		return nil
+		return nil, err
 	}
 
-	return &StatusCakeMonitor
+	return &StatusCakeMonitor, nil
 }
 
 // Add will create a new Monitor
@@ -779,7 +785,6 @@ func (service *StatusCakeMonitorService) Remove(m models.Monitor) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		log.Error(nil, fmt.Sprintf("Delete Request failed for Monitor: %s with id: %s", m.Name, m.ID))
-
 	} else {
 		_, err = service.GetByID(m.ID)
 		if strings.Contains(err.Error(), "Request failed") {
