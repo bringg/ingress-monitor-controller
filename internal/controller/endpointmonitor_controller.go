@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -88,20 +89,34 @@ func (r *EndpointMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	delay := time.Until(createTime.Add(config.GetControllerConfig().CreationDelay))
 
 	monitorService := r.GetMonitorOfType(instance.Spec)
-	monitor := findMonitorByName(monitorService, monitorName)
-	if monitor != nil {
+	monitor, err := findMonitorByName(monitorService, monitorName)
+	if err != nil {
+		// Monitor doesn't exist or request failed
+		if strings.Contains(err.Error(), "GetByName Request failed") {
+			// Monitor doesn't exist, create monitor
+			if delay.Nanoseconds() > 0 {
+				// Requeue request to add creation delay
+				log.Info("Requeuing request to add monitor " + monitorName + " for " + fmt.Sprintf("%+v", config.GetControllerConfig().CreationDelay) + " seconds")
+				return reconcile.Result{RequeueAfter: delay}, nil
+			}
+			err = r.handleCreate(req, instance, monitorName, monitorService)
+			if err != nil {
+				log.Error(err, "Error while handling create")
+				return reconcile.Result{}, err
+			}
+		} else {
+			log.Error(err, "GetAll request failed")
+			return reconcile.Result{}, err
+		}
+	} else if monitor != nil {
 		// Monitor already exists, update if required
 		err = r.handleUpdate(req, instance, *monitor, monitorService)
-	} else {
-		// Monitor doesn't exist, create monitor
-		if delay.Nanoseconds() > 0 {
-			// Requeue request to add creation delay
-			log.Info("Requeuing request to add monitor " + monitorName + " for " + fmt.Sprintf("%+v", config.GetControllerConfig().CreationDelay) + " seconds")
-			return reconcile.Result{RequeueAfter: delay}, nil
+		if err != nil {
+			log.Error(err, "Error while handling update")
+			return reconcile.Result{}, err
 		}
-		err = r.handleCreate(req, instance, monitorName, monitorService)
 	}
-	return reconcile.Result{RequeueAfter: config.ReconciliationRequeueTime}, err
+	return reconcile.Result{RequeueAfter: config.ReconciliationRequeueTime}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -118,32 +133,8 @@ func (r *EndpointMonitorReconciler) GetMonitorOfType(spec endpointmonitorv1alpha
 	if len(r.MonitorServices) == 0 {
 		panic("No monitor services found")
 	}
-	if spec.PingdomTransactionConfig != nil {
-		return r.GetMonitorServiceOfType(monitors.TypePingdomTransaction)
-	}
-	if spec.PingdomConfig != nil {
-		return r.GetMonitorServiceOfType(monitors.TypePingdom)
-	}
-	if spec.UptimeRobotConfig != nil {
-		return r.GetMonitorServiceOfType(monitors.TypeUptimeRobot)
-	}
 	if spec.StatusCakeConfig != nil {
 		return r.GetMonitorServiceOfType(monitors.TypeStatusCake)
-	}
-	if spec.UptimeConfig != nil {
-		return r.GetMonitorServiceOfType(monitors.TypeUptime)
-	}
-	if spec.UpdownConfig != nil {
-		return r.GetMonitorServiceOfType(monitors.TypeUpdown)
-	}
-	if spec.AppInsightsConfig != nil {
-		return r.GetMonitorServiceOfType(monitors.TypeAppInsights)
-	}
-	if spec.GCloudConfig != nil {
-		return r.GetMonitorServiceOfType(monitors.TypeGCloud)
-	}
-	if spec.GrafanaConfig != nil {
-		return r.GetMonitorServiceOfType(monitors.TypeGrafana)
 	}
 	// If none of the above, return the first monitor service
 	return r.MonitorServices[0]
